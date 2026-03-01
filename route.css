@@ -17,6 +17,7 @@
   font-size: 18px;
   font-weight: 500;
   padding-left: 14px;
+  border-left: 3px solid #3b82f6; /* default color, overridden by script */
 }
 
 .route-header .sub {
@@ -55,7 +56,7 @@
 .stat-card .empty-val {
   font-size: 24px;
   font-weight: 300;
-  color: var(--border);
+  color: var(--text); /* use readable text color */
 }
 
 .stat-card .empty-note {
@@ -109,4 +110,42 @@
 .incidents-empty {
   font-size: 13px;
   color: var(--muted);
+}
+/* simple horizontal bar chart rendered by route.js */
+.hourly-chart {
+  display: flex;
+  align-items: flex-end;
+  gap: 2px;
+  height: 120px;
+  margin-top: 8px;
+}
+.hourly-chart .bar {
+  flex: 1;
+  background: var(--accent);
+  transition: height 0.2s;
+}
+
+.info-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 20px;
+  grid-column: 1 / -1;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.info-card .label {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--muted);
+}
+
+.info-content {
+  font-size: 14px;
+  color: var(--text);
+  line-height: 1.6;
+  min-height: 80px;
 }

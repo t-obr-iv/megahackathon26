@@ -1,0 +1,11 @@
+.overview-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 40px 48px;
+}
+
+/* override route.css default border-left on the header title */
+.route-header h2 {
+  border-left: none;
+  padding-left: 0;
+}

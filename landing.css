@@ -42,11 +42,20 @@
 }
 
 .route-btn:hover {
-  background: var(--border);
+  /* subtle hover indicator: only change the border color so it’s
+     clear that actual glow comes from map interaction, not a regular
+     mouseover on the button itself. */
+  background: var(--surface);
   border-color: var(--accent);
-  color: #fff;
+  color: var(--text);
 }
 
+.route-btn.highlight {
+  background: var(--route-color, var(--accent));
+  color: #fff;
+  border-color: var(--route-color, var(--accent));
+  box-shadow: 0 0 0 2px var(--route-color, currentColor), 0 0 16px var(--route-color, currentColor);
+}
 .route-btn .dot {
   width: 7px;
   height: 7px;
@@ -54,11 +63,54 @@
   flex-shrink: 0;
 }
 
+.sidebar-divider {
+  height: 1px;
+  background: var(--border);
+  margin: 8px 4px;
+}
+
+.overview-btn {
+  justify-content: center;
+  color: var(--muted);
+}
+
+.overview-btn:hover {
+  color: var(--text);
+}
+
 .map-area {
   flex: 1;
   display: flex;
   flex-direction: column;
   position: relative;
+  overflow: hidden;
+}
+
+/* Route detail panel – overlays the map content without leaving the page.
+   z-index must exceed Leaflet's highest internal pane (popup pane = 700). */
+.route-panel {
+  position: absolute;
+  inset: 0;
+  background: var(--bg);
+  z-index: 1000;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.route-panel .back-btn {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text);
+  padding: 7px 14px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+.route-panel .back-btn:hover {
+  border-color: var(--accent);
 }
 
 .header-bar {
@@ -75,28 +127,114 @@
   letter-spacing: 0.02em;
 }
 
-.live-badge {
+.mta-toggle {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 10px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.mta-label {
   font-size: 12px;
-  color: var(--green);
+  color: var(--muted);
+  transition: color 0.15s;
 }
 
-.live-badge::before {
+.mta-toggle:has(input:checked) .mta-label {
+  color: var(--text);
+}
+
+.toggle-track {
+  position: relative;
+  width: 38px;
+  height: 22px;
+  flex-shrink: 0;
+}
+
+.toggle-track input {
+  opacity: 0;
+  width: 0;
+  height: 0;
+  position: absolute;
+}
+
+.toggle-thumb {
+  position: absolute;
+  inset: 0;
+  background: var(--border);
+  border-radius: 22px;
+  border: 1px solid #333;
+  transition: background 0.2s;
+}
+
+.toggle-thumb::after {
   content: '';
-  width: 7px;
-  height: 7px;
-  background: var(--green);
+  position: absolute;
+  width: 16px;
+  height: 16px;
+  background: var(--muted);
   border-radius: 50%;
-  animation: pulse 1s infinite;
+  top: 2px;
+  left: 2px;
+  transition: transform 0.2s, background 0.2s;
 }
 
-@keyframes pulse {
-  0%, 100% { opacity: 1; }
-  50%       { opacity: 0.3; }
+.toggle-track input:checked + .toggle-thumb {
+  background: #34A853;
+  border-color: #34A853;
+}
+
+.toggle-track input:checked + .toggle-thumb::after {
+  transform: translateX(16px);
+  background: #fff;
+}
+
+.mta-spinner {
+  display: none;
+  width: 13px;
+  height: 13px;
+  border: 2px solid rgba(255, 255, 255, 0.15);
+  border-top-color: var(--text);
+  border-radius: 50%;
+  flex-shrink: 0;
+  animation: mta-spin 0.65s linear infinite;
+}
+
+.mta-loading .mta-spinner {
+  display: inline-block;
+}
+
+.mta-loading .mta-label {
+  opacity: 0.55;
+}
+
+@keyframes mta-spin {
+  to { transform: rotate(360deg); }
 }
 
 .map-content {
   flex: 1;
+}
+/* enforce full-size container for TomTom map */
+.map-content { width: 100
+/* enforce full-size container for TomTom map */
+.map-content { width: 100%; height: 100%; position: relative; }
+
+/* overlay messages when map can't load */
+.map-error {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background: rgba(0,0,0,0.75);
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: 1rem;
+  font-size: 1rem;
+  z-index: 10;
 }

@@ -43,8 +43,8 @@ BASE_FLOW    = "https://api.tomtom.com/traffic/services/4/flowSegmentData/absolu
 NYC_LAT    = (40.700, 40.820)
 NYC_LON    = (-74.020, -73.900)
 
-NUM_ROUTES   = 150 #change this to do more routes
-FLOW_SAMPLES = 5 #change this to do more point samples for flow per route (more api requests)
+NUM_ROUTES   = 30  # reduced from 150 to stay within free tier quotas
+FLOW_SAMPLES = 3   # reduced from 5 to minimize API calls
 MIN_DIST_M   = 1000 #minimum distance for a route to be, =1km currently since TomTom uses kilometers for its distance
 
 #make sure api works
@@ -105,15 +105,21 @@ def get_route(origin: tuple, dest: tuple, mode: str) -> dict | None:
         "routeType":  "shortest" if mode == "shortest" else "fastest",
         "traffic":    "false"    if mode == "shortest" else "true",
     }
-    try:
-        r = requests.get(f"{BASE_ROUTING}/{coords}/json", params=params, timeout=12)
-        if r.status_code != 200:
-            print(f"    [{mode}] HTTP {r.status_code}: {r.text[:120]}")
+    
+    # retry logic for rate limits
+    for attempt in range(3):
+        try:
+            r = requests.get(f"{BASE_ROUTING}/{coords}/json", params=params, timeout=12)
+            if r.status_code == 429:  # rate limit
+                wait = 2 ** attempt  # exponential backoff: 1s, 2s, 4s
+                time.sleep(wait)
+                continue
+            if r.status_code != 200:
+                return None
+            return r.json()["routes"][0]
+        except Exception as e:
             return None
-        return r.json()["routes"][0]
-    except Exception as e:
-        print(f"    [{mode}] Exception: {e}")
-        return None
+    return None
 
 
 def sample_route_points(route: dict, n: int) -> list[tuple]:
@@ -127,17 +133,22 @@ def sample_route_points(route: dict, n: int) -> list[tuple]:
 
 def get_flow_ratio(lat: float, lon: float) -> float | None:
     """currentSpeed / freeFlowSpeed — 1.0 = free flow, <1.0 = congested."""
-    try:
-        r = requests.get(BASE_FLOW, params={
-            "key": API_KEY, "point": f"{lat},{lon}", "unit": "KMPH",
-        }, timeout=10)
-        if r.status_code != 200:
+    for attempt in range(2):
+        try:
+            r = requests.get(BASE_FLOW, params={
+                "key": API_KEY, "point": f"{lat},{lon}", "unit": "KMPH",
+            }, timeout=10)
+            if r.status_code == 429:
+                time.sleep(1)
+                continue
+            if r.status_code != 200:
+                return None
+            d = r.json()["flowSegmentData"]
+            ff = d["freeFlowSpeed"]
+            return d["currentSpeed"] / ff if ff > 0 else None
+        except Exception:
             return None
-        d = r.json()["flowSegmentData"]
-        ff = d["freeFlowSpeed"]
-        return d["currentSpeed"] / ff if ff > 0 else None
-    except Exception:
-        return None
+    return None
 
 #The actual comparison logic
 def analyse_pair(origin: tuple, dest: tuple) -> dict | None:
@@ -166,14 +177,18 @@ def analyse_pair(origin: tuple, dest: tuple) -> dict | None:
     dist_agreement = short_dist / fast_dist if fast_dist > 0 else np.nan
     time_saved_s   = short_time - fast_time   # >0 means fastest is quicker
 
-    #Sample flow along the shortest path
+    # Extract ALL route points for accurate visualization
+    all_pts = [(p["latitude"], p["longitude"])
+               for leg in short["legs"] for p in leg["points"]]
+    
+    # Sample a subset for flow analysis (to reduce API calls)
     pts         = sample_route_points(short, FLOW_SAMPLES)
     flow_ratios = []
     for lat, lon in pts:
         r = get_flow_ratio(lat, lon)
         if r is not None:
             flow_ratios.append(r)
-        time.sleep(0.1)
+        time.sleep(0.5)  # increased from 0.1 to reduce rate limit hits
 
     if len(flow_ratios) < 2:
         return None
@@ -212,6 +227,8 @@ def analyse_pair(origin: tuple, dest: tuple) -> dict | None:
         ),
         # Combined correlation score
         "flow_agreement_score": round(flow_agreement_corr, 4),
+        # store FULL route geometry (not just sampled points)
+        "route_points":        all_pts,
     }
 
 #Main function, makes output
@@ -278,6 +295,15 @@ def main() -> pd.DataFrame:
 
     df.to_csv("top100_routes.csv", index=True)
     print(f"\n  Saved → top100_routes.csv")
+
+    # also write JSON file for the web frontend, include only the top routes
+    # keep geometry samples so we can draw lines on the map
+    import json
+    top_routes = sorted(results, key=lambda r: r["flow_agreement_score"],
+                        reverse=True)[: len(df)]
+    with open("busy_roads.json", "w") as jf:
+        json.dump(top_routes, jf)
+    print(f"  Saved → busy_roads.json (for map overlay)")
 
     return df
 
