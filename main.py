@@ -14,6 +14,7 @@ For each random point pair in NYC:
   - Fetches the fastest-by-traffic route
   - Samples real-time flow ratio along the shortest path
   - Compares the two routes (distance, time, agreement)
+  - Saves full path geometry for transit map overlay
 Stores the 100 most correlated results in a Pandas DataFrame.
 
 Correlation measured: does higher flow on the shortest path
@@ -28,6 +29,7 @@ Requirements:
 
 import os
 import time
+import json
 import requests
 import numpy as np
 import pandas as pd
@@ -44,8 +46,9 @@ NYC_LAT    = (40.700, 40.820)
 NYC_LON    = (-74.020, -73.900)
 
 NUM_ROUTES   = 150 #change this to do more routes
-FLOW_SAMPLES = 5 #change this to do more point samples for flow per route (more api requests)
-MIN_DIST_M   = 1000 #minimum distance for a route to be, =1km currently since TomTom uses kilometers for its distance
+FLOW_SAMPLES = 5   #change this to do more point samples for flow per route (more api requests)
+MIN_DIST_M   = 1000 #minimum distance for a route to be, =1km currently since TomTom uses meters
+
 
 #make sure api works
 def check_api_key() -> bool:
@@ -116,9 +119,22 @@ def get_route(origin: tuple, dest: tuple, mode: str) -> dict | None:
         return None
 
 
+def extract_geometry(route: dict) -> list[tuple]:
+    """
+    Pull the full ordered list of (lat, lon) points from a route.
+    This is the complete path geometry — every coordinate TomTom returns,
+    not just the sampled subset used for flow data.
+    Used later to overlay the route on a transit map.
+    """
+    return [
+        (p["latitude"], p["longitude"])
+        for leg in route["legs"]
+        for p in leg["points"]
+    ]
+
+
 def sample_route_points(route: dict, n: int) -> list[tuple]:
-    pts = [(p["latitude"], p["longitude"])
-           for leg in route["legs"] for p in leg["points"]]
+    pts = extract_geometry(route)
     if len(pts) < 2:
         return pts
     idx = np.linspace(0, len(pts) - 1, n, dtype=int)
@@ -139,14 +155,16 @@ def get_flow_ratio(lat: float, lon: float) -> float | None:
     except Exception:
         return None
 
+
 #The actual comparison logic
 def analyse_pair(origin: tuple, dest: tuple) -> dict | None:
     """
     For one origin→dest pair:
       1. Get shortest-by-distance route  (no traffic)
       2. Get fastest-by-traffic route    (with traffic)
-      3. Sample flow ratio along the shortest path
-      4. Compute route agreement + correlation metric
+      3. Extract full geometry of the shortest path
+      4. Sample flow ratio along the shortest path
+      5. Compute route agreement + correlation metric
     """
     short = get_route(origin, dest, "shortest")
     fast  = get_route(origin, dest, "fastest")
@@ -161,12 +179,17 @@ def analyse_pair(origin: tuple, dest: tuple) -> dict | None:
     if short_dist < MIN_DIST_M:
         return None
 
+    # Full geometry of the shortest path — saved for transit overlay
+    # Stored as a JSON string in the CSV so it survives serialization.
+    # Load it back with: json.loads(df["short_path"][i])
+    short_path  = extract_geometry(short)
+
     # distance_agreement: 1.0 = identical distance, <1.0 = fastest is longer
     # time_saved_s: how many seconds faster the traffic-optimal route is
     dist_agreement = short_dist / fast_dist if fast_dist > 0 else np.nan
     time_saved_s   = short_time - fast_time   # >0 means fastest is quicker
 
-    #Sample flow along the shortest path
+    # Sample flow along the shortest path
     pts         = sample_route_points(short, FLOW_SAMPLES)
     flow_ratios = []
     for lat, lon in pts:
@@ -178,11 +201,11 @@ def analyse_pair(origin: tuple, dest: tuple) -> dict | None:
     if len(flow_ratios) < 2:
         return None
 
-    flow_arr     = np.array(flow_ratios)
-    mean_flow    = float(np.mean(flow_arr))
-    flow_std     = float(np.std(flow_arr))
+    flow_arr  = np.array(flow_ratios)
+    mean_flow = float(np.mean(flow_arr))
+    flow_std  = float(np.std(flow_arr))
 
-    #flow ratio vs. route agreement
+    # flow ratio vs. route agreement
     # High flow + high agreement -> shortest path *is* the best path
     # Low flow  + low agreement  -> traffic forcing a different route
     flow_agreement_corr = mean_flow * dist_agreement  # combined score
@@ -212,20 +235,20 @@ def analyse_pair(origin: tuple, dest: tuple) -> dict | None:
         ),
         # Combined correlation score
         "flow_agreement_score": round(flow_agreement_corr, 4),
+        # Full path geometry — list of (lat, lon) tuples for transit overlay
+        # Serialized as JSON string for CSV compatibility
+        "short_path":          json.dumps(short_path),
+        "short_path_points":   len(short_path),  # quick reference without parsing
     }
 
-#Main function, makes output
 
+#Main function, makes output
 def main() -> pd.DataFrame:
     if API_KEY == "YOUR_API_KEY_HERE":
-        raise ValueError(
-            "API key not set"
-        )
+        raise ValueError("API key not set")
 
     if not check_api_key():
-        raise RuntimeError(
-            "API check failed"
-        )
+        raise RuntimeError("API check failed")
 
     print(f"Analysing {NUM_ROUTES} random NYC route pairs\n")
     results = []
@@ -243,7 +266,8 @@ def main() -> pd.DataFrame:
                 f"agree={result['dist_agreement']:.2f}  "
                 f"saved={result['time_saved_s']}s  "
                 f"score={result['flow_agreement_score']:.3f}  "
-                f"[{result['congestion_label']}]"
+                f"[{result['congestion_label']}]  "
+                f"pts={result['short_path_points']}"
             )
         else:
             print("✗  skipped")
@@ -263,10 +287,10 @@ def main() -> pd.DataFrame:
     print(df[[
         "short_dist_m", "fast_dist_m", "dist_agreement",
         "time_saved_s", "mean_flow_ratio", "flow_agreement_score",
-        "congestion_label"
+        "congestion_label", "short_path_points"
     ]].to_string())
 
-    #Correlation
+    # Correlation
     r = np.corrcoef(df["mean_flow_ratio"], df["dist_agreement"])[0, 1]
     print(f"\n── Cross-pair stats ────────────────────────────────────────")
     print(f"  Pearson r (flow ratio vs. route agreement) : {r:.3f}")
@@ -280,6 +304,7 @@ def main() -> pd.DataFrame:
     print(f"\n  Saved → top100_routes.csv")
 
     return df
+
 
 
 if __name__ == "__main__":
