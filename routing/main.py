@@ -37,7 +37,18 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-API_KEY = os.getenv("TOMTOM_API_KEY", "YOUR_API_KEY_HERE")
+def add_api_keys(api_keys:list[str], key_names:list[str] = ["TOMTOM_API_KEY"]):
+    for key_name in key_names:
+        api_key = os.getenv(key_name, None)
+        if api_key:
+            api_keys.append(api_key)
+    return api_keys
+
+API_KEYS = add_api_keys([], [
+    "TOMTOM_API_KEY",
+    "TOMTOM_API_KEY_TWO",
+    "TOMTOM_API_KEY_THREE"
+])
 
 BASE_ROUTING = "https://api.tomtom.com/routing/1/calculateRoute"
 BASE_FLOW    = "https://api.tomtom.com/traffic/services/4/flowSegmentData/absolute/10/json"
@@ -49,51 +60,62 @@ NUM_ROUTES   = 150 #change this to do more routes
 FLOW_SAMPLES = 5   #change this to do more point samples for flow per route (more api requests)
 MIN_DIST_M   = 1000 #minimum distance for a route to be, =1km currently since TomTom uses meters
 
+key_index = 0
+
+def get_key() -> str:
+    global key_index
+    API_KEY = API_KEYS[key_index]
+    key_index += 1
+    key_index %= len(API_KEYS)    
+    return API_KEY
+
 
 #make sure api works
-def check_api_key() -> bool:
+def check_api_keys() -> bool:
     print("── API Diagnostics ─────────────────────────────────────────")
     origin, dest = (40.7484, -73.9967), (40.7614, -73.9776)
     coords = f"{origin[0]},{origin[1]}:{dest[0]},{dest[1]}"
-
-    try:
-        r = requests.get(f"{BASE_ROUTING}/{coords}/json", params={
-            "key": API_KEY, "routeType": "shortest",
-            "travelMode": "car", "traffic": "false",
-        }, timeout=12)
-        if r.status_code == 200:
-            dist = r.json()["routes"][0]["summary"]["lengthInMeters"]
-            print(f"  ✔ Routing API — OK (test route: {dist}m)")
-        else:
-            print(f"  ✗ Routing API — HTTP {r.status_code}: {r.text[:200]}")
+    
+    for API_KEY in API_KEYS:
+        try:
+            r = requests.get(f"{BASE_ROUTING}/{coords}/json", params={
+                "key": API_KEY, "routeType": "shortest",
+                "travelMode": "car", "traffic": "false",
+            }, timeout=12)
+            if r.status_code == 200:
+                dist = r.json()["routes"][0]["summary"]["lengthInMeters"]
+                print(f"  ✔ Routing API — OK (test route: {dist}m)")
+            else:
+                print(f"  ✗ Routing API — HTTP {r.status_code}: {r.text[:200]}")
+                return False
+        except Exception as e:
+            print(f"  ✗ Routing API — Exception: {e}")
             return False
-    except Exception as e:
-        print(f"  ✗ Routing API — Exception: {e}")
-        return False
 
-    try:
-        r = requests.get(BASE_FLOW, params={
-            "key": API_KEY, "point": "40.7484,-73.9967", "unit": "KMPH",
-        }, timeout=10)
-        if r.status_code == 200:
-            d = r.json()["flowSegmentData"]
-            print(f"  ✔ Flow API    — OK (speed: {d['currentSpeed']} km/h, "
-                  f"free-flow: {d['freeFlowSpeed']} km/h)")
-        else:
-            print(f"  ✗ Flow API    — HTTP {r.status_code}: {r.text[:200]}")
+        try:
+            r = requests.get(BASE_FLOW, params={
+                "key": API_KEY, "point": "40.7484,-73.9967", "unit": "KMPH",
+            }, timeout=10)
+            if r.status_code == 200:
+                d = r.json()["flowSegmentData"]
+                print(f"  ✔ Flow API    — OK (speed: {d['currentSpeed']} km/h, "
+                    f"free-flow: {d['freeFlowSpeed']} km/h)")
+            else:
+                print(f"  ✗ Flow API    — HTTP {r.status_code}: {r.text[:200]}")
+                return False
+        except Exception as e:
+            print(f"  ✗ Flow API    — Exception: {e}")
             return False
-    except Exception as e:
-        print(f"  ✗ Flow API    — Exception: {e}")
-        return False
 
-    print()
+        print()
     return True
 
+with open(os.path.join("routing", "traffic.json"), 'r') as traffic_json:
+    traffic = json.load(traffic_json)
 
 def random_nyc_point() -> tuple:
     return (round(np.random.uniform(*NYC_LAT), 5),
             round(np.random.uniform(*NYC_LON), 5))
-
 
 def get_route(origin: tuple, dest: tuple, mode: str) -> dict | None:
     """
@@ -103,7 +125,7 @@ def get_route(origin: tuple, dest: tuple, mode: str) -> dict | None:
     """
     coords = f"{origin[0]},{origin[1]}:{dest[0]},{dest[1]}"
     params = {
-        "key":        API_KEY,
+        "key":        get_key(),
         "travelMode": "car",
         "routeType":  "shortest" if mode == "shortest" else "fastest",
         "traffic":    "false"    if mode == "shortest" else "true",
@@ -145,7 +167,7 @@ def get_flow_ratio(lat: float, lon: float) -> float | None:
     """currentSpeed / freeFlowSpeed — 1.0 = free flow, <1.0 = congested."""
     try:
         r = requests.get(BASE_FLOW, params={
-            "key": API_KEY, "point": f"{lat},{lon}", "unit": "KMPH",
+            "key": get_key(), "point": f"{lat},{lon}", "unit": "KMPH",
         }, timeout=10)
         if r.status_code != 200:
             return None
@@ -244,10 +266,10 @@ def analyse_pair(origin: tuple, dest: tuple) -> dict | None:
 
 #Main function, makes output
 def main() -> pd.DataFrame:
-    if API_KEY == "YOUR_API_KEY_HERE":
+    if len(API_KEYS) <= 0:
         raise ValueError("API key not set")
 
-    if not check_api_key():
+    if not check_api_keys():
         raise RuntimeError("API check failed")
 
     print(f"Analysing {NUM_ROUTES} random NYC route pairs\n")
@@ -304,8 +326,6 @@ def main() -> pd.DataFrame:
     print(f"\n  Saved → top100_routes.csv")
 
     return df
-
-
 
 if __name__ == "__main__":
     df = main()
