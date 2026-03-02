@@ -14,6 +14,7 @@ For each random point pair in NYC:
   - Fetches the fastest-by-traffic route
   - Samples real-time flow ratio along the shortest path
   - Compares the two routes (distance, time, agreement)
+  - Saves full path geometry for transit map overlay
 Stores the 100 most correlated results in a Pandas DataFrame.
 
 Correlation measured: does higher flow on the shortest path
@@ -28,6 +29,7 @@ Requirements:
 
 import os
 import time
+import json
 import requests
 import numpy as np
 import pandas as pd
@@ -48,7 +50,7 @@ FLOW_SAMPLES = 3   # reduced from 5 to minimize API calls
 MIN_DIST_M   = 1000 #minimum distance for a route to be, =1km currently since TomTom uses kilometers for its distance
 
 #make sure api works
-def check_api_key() -> bool:
+def check_api_keys() -> bool:
     print("── API Diagnostics ─────────────────────────────────────────")
     origin, dest = (40.7484, -73.9967), (40.7614, -73.9776)
     coords = f"{origin[0]},{origin[1]}:{dest[0]},{dest[1]}"
@@ -91,7 +93,6 @@ def random_nyc_point() -> tuple:
     return (round(np.random.uniform(*NYC_LAT), 5),
             round(np.random.uniform(*NYC_LON), 5))
 
-
 def get_route(origin: tuple, dest: tuple, mode: str) -> dict | None:
     """
     Fetch a route between two points.
@@ -122,9 +123,22 @@ def get_route(origin: tuple, dest: tuple, mode: str) -> dict | None:
     return None
 
 
+def extract_geometry(route: dict) -> list[tuple]:
+    """
+    Pull the full ordered list of (lat, lon) points from a route.
+    This is the complete path geometry — every coordinate TomTom returns,
+    not just the sampled subset used for flow data.
+    Used later to overlay the route on a transit map.
+    """
+    return [
+        (p["latitude"], p["longitude"])
+        for leg in route["legs"]
+        for p in leg["points"]
+    ]
+
+
 def sample_route_points(route: dict, n: int) -> list[tuple]:
-    pts = [(p["latitude"], p["longitude"])
-           for leg in route["legs"] for p in leg["points"]]
+    pts = extract_geometry(route)
     if len(pts) < 2:
         return pts
     idx = np.linspace(0, len(pts) - 1, n, dtype=int)
@@ -150,14 +164,16 @@ def get_flow_ratio(lat: float, lon: float) -> float | None:
             return None
     return None
 
+
 #The actual comparison logic
 def analyse_pair(origin: tuple, dest: tuple) -> dict | None:
     """
     For one origin→dest pair:
       1. Get shortest-by-distance route  (no traffic)
       2. Get fastest-by-traffic route    (with traffic)
-      3. Sample flow ratio along the shortest path
-      4. Compute route agreement + correlation metric
+      3. Extract full geometry of the shortest path
+      4. Sample flow ratio along the shortest path
+      5. Compute route agreement + correlation metric
     """
     short = get_route(origin, dest, "shortest")
     fast  = get_route(origin, dest, "fastest")
@@ -193,11 +209,11 @@ def analyse_pair(origin: tuple, dest: tuple) -> dict | None:
     if len(flow_ratios) < 2:
         return None
 
-    flow_arr     = np.array(flow_ratios)
-    mean_flow    = float(np.mean(flow_arr))
-    flow_std     = float(np.std(flow_arr))
+    flow_arr  = np.array(flow_ratios)
+    mean_flow = float(np.mean(flow_arr))
+    flow_std  = float(np.std(flow_arr))
 
-    #flow ratio vs. route agreement
+    # flow ratio vs. route agreement
     # High flow + high agreement -> shortest path *is* the best path
     # Low flow  + low agreement  -> traffic forcing a different route
     flow_agreement_corr = mean_flow * dist_agreement  # combined score
@@ -231,18 +247,16 @@ def analyse_pair(origin: tuple, dest: tuple) -> dict | None:
         "route_points":        all_pts,
     }
 
-#Main function, makes output
 
+#Main function, makes output
 def main() -> pd.DataFrame:
     if API_KEY == "YOUR_API_KEY_HERE":
         raise ValueError(
             "API key not set"
         )
 
-    if not check_api_key():
-        raise RuntimeError(
-            "API check failed"
-        )
+    if not check_api_keys():
+        raise RuntimeError("API check failed")
 
     print(f"Analysing {NUM_ROUTES} random NYC route pairs\n")
     results = []
@@ -283,7 +297,7 @@ def main() -> pd.DataFrame:
         "congestion_label"
     ]].to_string())
 
-    #Correlation
+    # Correlation
     r = np.corrcoef(df["mean_flow_ratio"], df["dist_agreement"])[0, 1]
     print(f"\n── Cross-pair stats ────────────────────────────────────────")
     print(f"  Pearson r (flow ratio vs. route agreement) : {r:.3f}")
@@ -298,7 +312,6 @@ def main() -> pd.DataFrame:
 
     # also write JSON file for the web frontend, include only the top routes
     # keep geometry samples so we can draw lines on the map
-    import json
     top_routes = sorted(results, key=lambda r: r["flow_agreement_score"],
                         reverse=True)[: len(df)]
     with open("busy_roads.json", "w") as jf:
@@ -306,7 +319,6 @@ def main() -> pd.DataFrame:
     print(f"  Saved → busy_roads.json (for map overlay)")
 
     return df
-
 
 if __name__ == "__main__":
     df = main()
