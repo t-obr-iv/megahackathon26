@@ -103,10 +103,13 @@ async function populateRoutePage() {
       });
 
       // Information section – full-width card at the bottom for manual notes
-      const infoCard = document.createElement('div');
-      infoCard.className = 'info-card';
-      infoCard.innerHTML = `<div class="label">Information</div><div class="info-content"></div>`;
-      body.appendChild(infoCard);
+      // Only add if it doesn't already exist in the HTML
+      if (!body.querySelector('.info-card')) {
+        const infoCard = document.createElement('div');
+        infoCard.className = 'info-card';
+        infoCard.innerHTML = `<div class="label">Information</div><div class="info-content"></div>`;
+        body.appendChild(infoCard);
+      }
     }
 
 
